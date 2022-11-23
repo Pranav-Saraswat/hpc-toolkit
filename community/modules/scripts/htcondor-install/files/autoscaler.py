@@ -88,9 +88,9 @@ class AutoScaler:
 
     # Remove specified instance from MIG and decrease MIG size
     def deleteFromMig(self, instance, zone):
-        instanceUrl = "https://www.googleapis.com/compute/v1/projects/" + self.project
-        instanceUrl += "/zones/" + zone
-        instanceUrl += "/instances/" + instance
+        instanceUrl = f"https://www.googleapis.com/compute/v1/projects/{self.project}"
+        instanceUrl += f"/zones/{zone}"
+        instanceUrl += f"/instances/{instance}"
 
         instances_to_delete = {"instances": [instanceUrl]}
 
@@ -105,7 +105,7 @@ class AutoScaler:
         if not self.dryrun:
             response = requestDelInstance.execute()
             if self.debug > 0:
-                print("Request to delete instance " + instance)
+                print(f"Request to delete instance {instance}")
                 pprint(response)
             return response
         return "Dry Run"
@@ -143,8 +143,8 @@ class AutoScaler:
             "preemptible"
         ]
         if self.debug > 0:
-            print("Machine Type: " + machine_type)
-            print("Is preemtible: " + str(is_preemtible))
+            print(f"Machine Type: {machine_type}")
+            print(f"Is preemtible: {str(is_preemtible)}")
         request = self.service.machineTypes().get(
             project=self.project, zone=self.zone, machineType=machine_type
         )
@@ -154,36 +154,34 @@ class AutoScaler:
             print("Machine information")
             pprint(responseInstanceTemplateInfo["properties"])
         if self.debug > 0:
-            print("Guest CPUs: " + str(guest_cpus))
+            print(f"Guest CPUs: {str(guest_cpus)}")
 
-        instanceTemlateInfo = {
+        return {
             "machine_type": machine_type,
             "is_preemtible": is_preemtible,
             "guest_cpus": guest_cpus,
         }
-        return instanceTemlateInfo
 
     def scale(self):
         # diagnosis
         if self.debug > 1:
             print("Launching autoscaler.py with the following arguments:")
-            print("project_id: " + self.project)
-            print("zone: " + self.zone)
-            print("region: " + self.region)
+            print(f"project_id: {self.project}")
+            print(f"zone: {self.zone}")
+            print(f"region: {self.region}")
             print(f"multizone: {self.multizone}")
-            print("group_manager: " + self.instance_group_manager)
-            print("computeinstancelimit: " + str(self.compute_instance_limit))
-            print("debuglevel: " + str(self.debug))
-
-        if self.multizone:
-            self.zoneargs = {"region": self.region}
-        else:
-            self.zoneargs = {"zone": self.zone}
+            print(f"group_manager: {self.instance_group_manager}")
+            print(f"computeinstancelimit: {str(self.compute_instance_limit)}")
+            print(f"debuglevel: {str(self.debug)}")
 
         # Get total number of jobs in the queue that includes number of jos waiting as well as number of jobs already assigned to nodes
         queue_length_req = (
             'condor_q -totals -format "%d " Jobs -format "%d " Idle -format "%d " Held'
         )
+        self.zoneargs = (
+            {"region": self.region} if self.multizone else {"zone": self.zone}
+        )
+
         queue_length_resp = os.popen(queue_length_req).read().split()
 
         if len(queue_length_resp) > 1:
@@ -195,9 +193,9 @@ class AutoScaler:
             idle_jobs = 0
             on_hold_jobs = 0
 
-        print("Total queue length: " + str(queue))
-        print("Idle jobs: " + str(idle_jobs))
-        print("Jobs on hold: " + str(on_hold_jobs))
+        print(f"Total queue length: {queue}")
+        print(f"Idle jobs: {idle_jobs}")
+        print(f"Jobs on hold: {on_hold_jobs}")
 
         instanceTemlateInfo = self.getInstanceTemplateInfo()
         if self.debug > 1:
@@ -205,7 +203,7 @@ class AutoScaler:
             pprint(instanceTemlateInfo)
 
         self.cores_per_node = instanceTemlateInfo["guest_cpus"]
-        print("Number of CPU per compute node: " + str(self.cores_per_node))
+        print(f"Number of CPU per compute node: {str(self.cores_per_node)}")
 
         # Get state for for all jobs in Condor
         name_req = "condor_status  -af Name State CloudZone"
@@ -217,31 +215,25 @@ class AutoScaler:
         # Adjust current queue length by the number of jos that are on-hold
         queue -= on_hold_jobs
         if on_hold_jobs > 0:
-            print("Adjusted queue length: " + str(queue))
+            print(f"Adjusted queue length: {queue}")
 
         # Calculate number instances to satisfy current job queue length
         if queue > 0:
             self.size = int(math.ceil(float(queue) / float(self.cores_per_node)))
             if self.debug > 0:
                 print(
-                    "Calculating size of MIG: ⌈"
-                    + str(queue)
-                    + "/"
-                    + str(self.cores_per_node)
-                    + "⌉ = "
-                    + str(self.size)
+                    f"Calculating size of MIG: ⌈{queue}/{str(self.cores_per_node)}⌉ = {self.size}"
                 )
+
         else:
             self.size = 0
 
         # If compute instance limit is specified, can not start more instances then specified in the limit
         if self.compute_instance_limit > 0 and self.size > self.compute_instance_limit:
             self.size = self.compute_instance_limit
-            print(
-                "MIG target size will be limited by " + str(self.compute_instance_limit)
-            )
+            print(f"MIG target size will be limited by {str(self.compute_instance_limit)}")
 
-        print("New MIG target size: " + str(self.size))
+        print(f"New MIG target size: {str(self.size)}")
 
         # Get current number of instances in the MIG
         requestGroupInfo = self.instanceGroupManagers.get(
@@ -251,7 +243,7 @@ class AutoScaler:
         )
         responseGroupInfo = requestGroupInfo.execute()
         currentTarget = int(responseGroupInfo["targetSize"])
-        print("Current MIG target size: " + str(currentTarget))
+        print(f"Current MIG target size: {currentTarget}")
 
         if self.debug > 1:
             print("MIG Information:")
@@ -289,17 +281,12 @@ class AutoScaler:
                         server = slot_server[0].split(".")[0]
 
                     if self.debug > 0:
-                        print(slot + ", " + server + ", " + status + "\n")
+                        print(f"{slot}, {server}, {status}" + "\n")
 
-                    if server not in idle_node_zones:
-                        if status == "Unclaimed":
-                            idle_node_zones[server] = zone
-                        else:
-                            idle_node_zones[server] = None
-                    else:
-                        if status != "Unclaimed":
-                            idle_node_zones[server] = None
-
+                    if server not in idle_node_zones and status == "Unclaimed":
+                        idle_node_zones[server] = zone
+                    elif server not in idle_node_zones or status != "Unclaimed":
+                        idle_node_zones[server] = None
             if self.debug > 1:
                 print("Compute node busy status:")
                 print(idle_node_zones)
@@ -307,19 +294,17 @@ class AutoScaler:
             # Shut down nodes that are not busy
             for node, zone in idle_node_zones.items():
                 if zone:
-                    print("Will shut down: " + node + " ...")
+                    print(f"Will shut down: {node} ...")
                     respDel = self.deleteFromMig(node, zone)
                     if self.debug > 1:
-                        print("Shut down request for compute node " + node)
+                        print(f"Shut down request for compute node {node}")
                         pprint(respDel)
 
             if self.debug > 1:
                 print("Scaling down complete")
 
         if self.size > currentTarget:
-            print(
-                "Scaling up. Need to increase number of instances to " + str(self.size)
-            )
+            print(f"Scaling up. Need to increase number of instances to {str(self.size)}")
             # Request to resize
             request = self.instanceGroupManagers.resize(
                 project=self.project,
@@ -359,16 +344,8 @@ def main():
     # Dry run: : 0, run scaling; 1, only provide info.
     scaler.dryrun = args.d > 0
 
-    # Debug level: 1-print debug information, 2 - print detail debug information
-    scaler.debug = 0
-    if args.v:
-        scaler.debug = args.v
-
-    # Limit for the maximum number of compute instance. If zero (default setting), no limit will be enforced by the  script
-    scaler.compute_instance_limit = 0
-    if args.c:
-        scaler.compute_instance_limit = abs(args.c)
-
+    scaler.debug = args.v or 0
+    scaler.compute_instance_limit = abs(args.c) if args.c else 0
     scaler.scale()
 
 
